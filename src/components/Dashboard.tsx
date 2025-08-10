@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -25,14 +26,44 @@ export const Dashboard = () => {
   const [showBalance, setShowBalance] = useState(true);
   const [isDepositOpen, setIsDepositOpen] = useState(false);
   const [isWithdrawOpen, setIsWithdrawOpen] = useState(false);
+  const [userBalance, setUserBalance] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Mock user data
+  // User data with dynamic balance
   const user = {
-    name: "`Ratombo Livhuwani",
+    name: "Ratombo Livhuwani",
     phone: "+27 79 919 8802",
-    balance: 15750.50,
+    balance: userBalance,
     kycStatus: "verified" as const,
     accountNumber: "****18176"
+  };
+
+  useEffect(() => {
+    fetchUserBalance();
+  }, []);
+
+  const fetchUserBalance = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setIsLoading(false);
+        return;
+      }
+
+      const { data: wallet } = await supabase
+        .from('wallets')
+        .select('balance_cents')
+        .eq('user_id', user.id)
+        .single();
+
+      if (wallet) {
+        setUserBalance(wallet.balance_cents / 100);
+      }
+    } catch (error) {
+      console.error('Error fetching balance:', error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const quickStats = [
@@ -186,8 +217,16 @@ export const Dashboard = () => {
       </div>
 
       {/* Modals */}
-      <DepositModal open={isDepositOpen} onOpenChange={setIsDepositOpen} />
-      <WithdrawModal open={isWithdrawOpen} onOpenChange={setIsWithdrawOpen} />
+      <DepositModal 
+        open={isDepositOpen} 
+        onOpenChange={setIsDepositOpen} 
+        onDepositSuccess={fetchUserBalance}
+      />
+      <WithdrawModal 
+        open={isWithdrawOpen} 
+        onOpenChange={setIsWithdrawOpen} 
+        onWithdrawSuccess={fetchUserBalance}
+      />
     </div>
   );
 };

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,22 +7,48 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AlertTriangle, Building2, Shield, CheckCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 interface WithdrawModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onWithdrawSuccess?: () => void;
 }
 
-export const WithdrawModal = ({ open, onOpenChange }: WithdrawModalProps) => {
+export const WithdrawModal = ({ open, onOpenChange, onWithdrawSuccess }: WithdrawModalProps) => {
   const [amount, setAmount] = useState("");
   const [bankAccount, setBankAccount] = useState("");
   const [accountHolder, setAccountHolder] = useState("");
   const [bankName, setBankName] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [availableBalance, setAvailableBalance] = useState(0);
   const { toast } = useToast();
 
-  // Mock user balance
-  const availableBalance = 15750.50;
+  // Fetch user balance when modal opens
+  useEffect(() => {
+    if (open) {
+      fetchBalance();
+    }
+  }, [open]);
+
+  const fetchBalance = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: wallet } = await supabase
+        .from('wallets')
+        .select('balance_cents')
+        .eq('user_id', user.id)
+        .single();
+
+      if (wallet) {
+        setAvailableBalance(wallet.balance_cents / 100);
+      }
+    } catch (error) {
+      console.error('Error fetching balance:', error);
+    }
+  };
 
   const handleWithdraw = async () => {
     if (!amount || !bankAccount || !accountHolder || !bankName) {
@@ -35,6 +61,9 @@ export const WithdrawModal = ({ open, onOpenChange }: WithdrawModalProps) => {
     }
 
     const withdrawAmount = parseFloat(amount);
+    const processingFee = 15.00;
+    const totalDeduction = withdrawAmount + processingFee;
+
     if (withdrawAmount < 100) {
       toast({
         variant: "destructive",
@@ -44,19 +73,60 @@ export const WithdrawModal = ({ open, onOpenChange }: WithdrawModalProps) => {
       return;
     }
 
-    if (withdrawAmount > availableBalance) {
+    if (totalDeduction > availableBalance) {
       toast({
         variant: "destructive",
         title: "Insufficient Funds",
-        description: "Withdrawal amount exceeds available balance."
+        description: "Withdrawal amount plus fees exceeds available balance."
       });
       return;
     }
 
     setIsProcessing(true);
 
-    // Simulate API call
-    setTimeout(() => {
+    try {
+      // Get current user
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      // Get current wallet balance
+      const { data: wallet } = await supabase
+        .from('wallets')
+        .select('balance_cents')
+        .eq('user_id', user.id)
+        .single();
+
+      if (!wallet) {
+        throw new Error("Wallet not found");
+      }
+
+      const totalDeductionCents = Math.round(totalDeduction * 100);
+      const newBalanceCents = wallet.balance_cents - totalDeductionCents;
+
+      // Update wallet balance
+      const { error: walletError } = await supabase
+        .from('wallets')
+        .update({ balance_cents: newBalanceCents })
+        .eq('user_id', user.id);
+
+      if (walletError) throw walletError;
+
+      // Create transaction record
+      const { error: transactionError } = await supabase
+        .from('transactions')
+        .insert({
+          user_id: user.id,
+          type: 'withdrawal',
+          amount_cents: Math.round(withdrawAmount * 100),
+          description: `Withdrawal to ${bankName} (${bankAccount})`,
+          status: 'pending',
+          provider_reference: `WD_${Date.now()}`
+        });
+
+      if (transactionError) throw transactionError;
+
       setIsProcessing(false);
       onOpenChange(false);
       setAmount("");
@@ -68,7 +138,17 @@ export const WithdrawModal = ({ open, onOpenChange }: WithdrawModalProps) => {
         title: "Withdrawal Requested",
         description: `R ${withdrawAmount.toLocaleString('en-ZA', { minimumFractionDigits: 2 })} withdrawal has been submitted for processing.`,
       });
-    }, 2000);
+
+      // Trigger refresh of balance
+      onWithdrawSuccess?.();
+    } catch (error) {
+      setIsProcessing(false);
+      toast({
+        variant: "destructive",
+        title: "Withdrawal Failed",
+        description: error instanceof Error ? error.message : "An error occurred during withdrawal."
+      });
+    }
   };
 
   const processingFee = 15.00;

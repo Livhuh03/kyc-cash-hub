@@ -8,13 +8,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CreditCard, Building2, Smartphone, Shield, CheckCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 interface DepositModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onDepositSuccess?: () => void;
 }
 
-export const DepositModal = ({ open, onOpenChange }: DepositModalProps) => {
+export const DepositModal = ({ open, onOpenChange, onDepositSuccess }: DepositModalProps) => {
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -71,18 +73,69 @@ export const DepositModal = ({ open, onOpenChange }: DepositModalProps) => {
 
     setIsProcessing(true);
 
-    // Simulate API call
-    setTimeout(() => {
+    try {
+      // Get current user
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      // Get current wallet balance
+      const { data: wallet } = await supabase
+        .from('wallets')
+        .select('balance_cents')
+        .eq('user_id', user.id)
+        .single();
+
+      if (!wallet) {
+        throw new Error("Wallet not found");
+      }
+
+      const depositAmountCents = Math.round(depositAmount * 100);
+      const newBalanceCents = wallet.balance_cents + depositAmountCents;
+
+      // Update wallet balance
+      const { error: walletError } = await supabase
+        .from('wallets')
+        .update({ balance_cents: newBalanceCents })
+        .eq('user_id', user.id);
+
+      if (walletError) throw walletError;
+
+      // Create transaction record
+      const { error: transactionError } = await supabase
+        .from('transactions')
+        .insert({
+          user_id: user.id,
+          type: 'deposit',
+          amount_cents: depositAmountCents,
+          description: `Deposit via ${selectedMethodDetails?.name}`,
+          status: 'completed',
+          provider_reference: `DEP_${Date.now()}`
+        });
+
+      if (transactionError) throw transactionError;
+
       setIsProcessing(false);
       onOpenChange(false);
       setAmount("");
       setMethod("");
       
       toast({
-        title: "Deposit Initiated",
-        description: `R ${depositAmount.toLocaleString('en-ZA', { minimumFractionDigits: 2 })} deposit has been processed via ${selectedMethodDetails?.name}.`,
+        title: "Deposit Successful",
+        description: `R ${depositAmount.toLocaleString('en-ZA', { minimumFractionDigits: 2 })} has been added to your account.`,
       });
-    }, 2000);
+
+      // Trigger refresh of balance
+      onDepositSuccess?.();
+    } catch (error) {
+      setIsProcessing(false);
+      toast({
+        variant: "destructive",
+        title: "Deposit Failed",
+        description: error instanceof Error ? error.message : "An error occurred during deposit."
+      });
+    }
   };
 
   const calculateFee = () => {
