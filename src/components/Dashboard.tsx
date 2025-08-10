@@ -28,11 +28,11 @@ export const Dashboard = () => {
 
   // Mock user data
   const user = {
-    name: "John Doe",
-    phone: "+27 82 123 4567",
+    name: "`Ratombo Livhuwani",
+    phone: "+27 79 919 8802",
     balance: 15750.50,
     kycStatus: "verified" as const,
-    accountNumber: "****1234"
+    accountNumber: "****18176"
   };
 
   const quickStats = [
